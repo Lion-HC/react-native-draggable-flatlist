@@ -72,7 +72,9 @@ class SortableFlatList extends Component {
 
           this._androidStatusBarOffset = (isTranslucent || isHidden) ? StatusBar.currentHeight : 0
         }
-        this._offset.setValue((this._additionalOffset + this._containerOffset - this._androidStatusBarOffset) * -1)
+        this.measureContainer(() => {
+          this._offset.setValue((this._additionalOffset + this._containerOffset - this._androidStatusBarOffset) * -1)
+        });
         return false
       },
       onMoveShouldSetPanResponder: (evt, gestureState) => {
@@ -178,7 +180,7 @@ class SortableFlatList extends Component {
       LayoutAnimation.easeInEaseOut()
       this.setState({ spacerIndex: nextSpacerIndex })
       this._spacerIndex = nextSpacerIndex
-      if (nextSpacerIndex === data.length) this._flatList.scrollToEnd()
+      if (nextSpacerIndex === data.length && this.props.scrollEnabled) this._flatList.scrollToEnd()
     }
 
     // Scroll if hovering in top or bottom of container and have set a scroll %
@@ -199,6 +201,7 @@ class SortableFlatList extends Component {
   }
 
   scroll = (scrollAmt, spacerIndex) => {
+    if (this.props.scrollEnabled === false) return
     if (spacerIndex >= this.props.data.length) return this._flatList.scrollToEnd()
     if (spacerIndex === -1) return
     const currentScrollOffset = this._scrollOffset
@@ -316,17 +319,14 @@ class SortableFlatList extends Component {
     )
   }
 
-  measureContainer = () => {
+  measureContainer = (callback) => {
     if (this._container) {
-      // setTimeout required or else dimensions reported as 0
-      setTimeout(() => {
         const { horizontal } = this.props
-        this._container.measure((x, y, width, height, pageX, pageY) => {
-          this._containerOffset = horizontal ? pageX : pageY
+        this._container.measureInWindow((x, y, width, height) => {
+          this._containerOffset = horizontal ? x : y
           this._containerSize = horizontal ? width : height
-          this._refs.forEach((ref, index) => this.measureItem(index))
+          callback && callback();
         })
-      }, this.props.measureDelay || 50)
     }
   }
 
@@ -343,7 +343,10 @@ class SortableFlatList extends Component {
     this._refs = []
     return (
       <View
-        onLayout={this.measureContainer}
+        onLayout={() => {
+          this.measureContainer()
+          this._refs.forEach((ref, index) => this.measureItem(index))
+        }}
         ref={ref => (this._container = ref)}
         {...this._panResponder.panHandlers}
         style={styles.wrapper} // Setting { opacity: 1 } fixes Android measurement bug: https://github.com/facebook/react-native/issues/18034#issuecomment-368417691
@@ -359,15 +362,15 @@ class SortableFlatList extends Component {
     return (
       <FlatList
         {...this.props}
-        scrollEnabled={this.state.activeRow === -1}
+        scrollEnabled={this.props.scrollEnabled && this.state.activeRow === -1}
         ref={ref => (this._flatList = ref)}
         renderItem={this.renderItem}
         extraData={this.state}
         keyExtractor={keyExtractor || this.keyExtractor}
-        onScroll={({ nativeEvent }) =>
-          (this._scrollOffset =
-            nativeEvent.contentOffset[horizontal ? 'x' : 'y'])
-        }
+        onScroll={x => { 
+          this._scrollOffset = x.nativeEvent.contentOffset[horizontal ? 'x' : 'y']
+          this.props.onScroll && this.props.onScroll(x)
+        }}
         scrollEventThrottle={16}
       />
     )
