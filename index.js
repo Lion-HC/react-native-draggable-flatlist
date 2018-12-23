@@ -340,6 +340,7 @@ class SortableFlatList extends Component {
 
   render() {
     const { wrap } = this.props
+    this._refs = []
     return (
       <View
         onLayout={this.measureContainer}
