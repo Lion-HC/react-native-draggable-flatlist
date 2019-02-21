@@ -133,6 +133,7 @@ class SortableFlatList extends Component {
         })
 
         this._releaseAnim.start(this.onReleaseAnimationEnd)
+        this.moveEnd()
       }
     })
     this.state = initialState
@@ -295,6 +296,7 @@ class SortableFlatList extends Component {
         horizontal={horizontal}
         index={index}
         isActiveRow={activeRow === index}
+        isLastRow={index === data.length - 1}
         spacerSize={spacerSize}
         renderItem={renderItem}
         item={item}
@@ -396,7 +398,7 @@ class RowItem extends PureComponent {
   }
 
   render() {
-    const { moveEnd, isActiveRow, horizontal, endPadding, spacerSize, renderItem, item, index, setRef } = this.props
+    const { moveEnd, isActiveRow, isLastRow, horizontal, endPadding, spacerSize, renderItem, item, index, setRef } = this.props
     const component = renderItem({
       isActive: false,
       item,
@@ -414,7 +416,15 @@ class RowItem extends PureComponent {
         ]}>
           {component}
         </View>
-        {!!endPadding && this.renderSpacer(endPadding)}
+        {
+          // Wrap endPadding spacer into View to fix Windows UIManager bug
+          // If spacerSize & endPadding spacers are at the same level (have the same parent),
+          // switching from one to another and back accidentally removes main wrapped component,
+          // probably due to wrong index to remove when removed and dropped by the 'delete' layout animation (direct deletion works fine)
+          !!isLastRow && <View opacity={1}>
+            {!!endPadding && this.renderSpacer(endPadding)}
+          </View>
+        }
       </View>
     )
   }
