@@ -360,14 +360,15 @@ class SortableFlatList extends Component {
   }
 
   renderFlatList() {
-    const { horizontal, keyExtractor } = this.props
+    const { horizontal, keyExtractor, extraData } = this.props
+    const extraDataWithState = Object.assign({}, extraData, this.state);
     return (
       <FlatList
         {...this.props}
         scrollEnabled={this.props.scrollEnabled && this.state.activeRow === -1}
         ref={ref => (this._flatList = ref)}
         renderItem={this.renderItem}
-        extraData={this.state}
+        extraData={extraDataWithState}
         keyExtractor={keyExtractor || this.keyExtractor}
         onScroll={x => { 
           this._scrollOffset = x.nativeEvent.contentOffset[horizontal ? 'x' : 'y']
