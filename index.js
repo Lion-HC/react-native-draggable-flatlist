@@ -18,6 +18,7 @@ UIManager.setLayoutAnimationEnabledExperimental && UIManager.setLayoutAnimationE
 
 const initialState = {
   activeRow: -1,
+  spacerSize: 0,
   showHoverComponent: false,
   spacerIndex: -1,
   scroll: false,
@@ -30,8 +31,6 @@ class SortableFlatList extends Component {
   _offset = new Animated.Value(0)
   _hoverAnim = Animated.add(this._moveAnim, this._offset)
   _spacerIndex = -1
-  _pixels = []
-  _measurements = []
   _scrollOffset = 0
   _container
   _containerSize
@@ -48,34 +47,38 @@ class SortableFlatList extends Component {
     super(props)
     this._panResponder = PanResponder.create({
       onStartShouldSetPanResponderCapture: (evt, gestureState) => {
-        const { pageX, pageY } = evt.nativeEvent
-        const { horizontal } = this.props
-        const tappedPixel = horizontal ? pageX : pageY
-        const tappedRow = this._pixels[Math.floor(this._scrollOffset + tappedPixel)]
-        if (tappedRow === undefined) return false
-        this._additionalOffset = (tappedPixel + this._scrollOffset) - this._measurements[tappedRow][horizontal ? 'x' : 'y']
         if (this._releaseAnim) {
-          return false
+          return false;
         }
-        this._moveAnim.setValue(tappedPixel)
-        this._move = tappedPixel
+        const { pageX, pageY } = evt.nativeEvent;
+        this.measureContainer().then(x => {
+          const { horizontal } = this.props;
+          const tappedPixel = horizontal ? pageX : pageY;
+          const relativePixel = this._scrollOffset - this._containerOffset + tappedPixel;
+          const tappedRow = this.getRowIndexAt(relativePixel);
+          if (tappedRow === -1) {
+            return false;
+          }
+          const metrix = this._getFrameMetrics(tappedRow);
+          this._additionalOffset = relativePixel - metrix.offset;
+          this._moveAnim.setValue(tappedPixel)
+          this._move = tappedPixel
+          // compensate for translucent or hidden StatusBar on android
+          if (Platform.OS === 'android' && !horizontal) {
+            const isTranslucent = StatusBar._propsStack.reduce(((acc, cur) => {
+              return cur.translucent === undefined ? acc : cur.translucent
+            }), false)
 
-        // compensate for translucent or hidden StatusBar on android
-        if (Platform.OS === 'android' && !horizontal) {
-          const isTranslucent = StatusBar._propsStack.reduce(((acc, cur) => {
-            return cur.translucent === undefined ? acc : cur.translucent
-          }), false)
+            const isHidden = StatusBar._propsStack.reduce(((acc, cur) => {
+              return cur.hidden === null ? acc : cur.hidden.value
+            }), false)
 
-          const isHidden = StatusBar._propsStack.reduce(((acc, cur) => {
-            return cur.hidden === null ? acc : cur.hidden.value
-          }), false)
+            this._androidStatusBarOffset = (isTranslucent || isHidden) ? StatusBar.currentHeight : 0
+          }
 
-          this._androidStatusBarOffset = (isTranslucent || isHidden) ? StatusBar.currentHeight : 0
-        }
-        this.measureContainer(() => {
           this._offset.setValue((this._additionalOffset + this._containerOffset - this._androidStatusBarOffset) * -1)
         });
-        return false
+        return false;
       },
       onMoveShouldSetPanResponder: (evt, gestureState) => {
         const { activeRow } = this.state
@@ -102,11 +105,7 @@ class SortableFlatList extends Component {
       onPanResponderTerminationRequest: ({ nativeEvent }, gestureState) => false,
       onPanResponderRelease: () => {
         const { activeRow, spacerIndex } = this.state
-        const { data, horizontal } = this.props
-        const activeMeasurements = this._measurements[activeRow]
-        const spacerMeasurements = this._measurements[spacerIndex]
-        const lastElementMeasurements = this._measurements[data.length - 1]
-
+        const { data } = this.props
         // If user flings row up and lets go in the middle of an animation measurements can error out. 
         // Give layout animations some time to complete and animate element into place before calling onMoveEnd
 
@@ -115,14 +114,14 @@ class SortableFlatList extends Component {
         // it shifts downward
         const isAfterActive = spacerIndex > activeRow
         const isLastElement = spacerIndex >= data.length
-        const spacerElement = isLastElement ? lastElementMeasurements : spacerMeasurements
+        const spacerElement = this._getFrameMetrics(isLastElement ? data.length - 1 : spacerIndex);
         if (!spacerElement) return
-        const { x, y, width, height } = spacerElement
-        const size = horizontal ? width : height
-        const offset = horizontal ? x : y
-        const pos = offset - this._scrollOffset + this._additionalOffset + (isLastElement ? size : 0)
-        const activeItemSize = horizontal ? activeMeasurements.width : activeMeasurements.height
-        this._releaseVal = pos - (isAfterActive ? activeItemSize : 0)
+        const { offset, length } = spacerElement;
+        let pos = offset + this._containerOffset - this._scrollOffset + this._additionalOffset + (isLastElement ? length : 0)
+        if (isLastElement) {
+          pos -= this.state.spacerSize;
+        }
+        this._releaseVal = pos - (isAfterActive ? this._getFrameMetrics(activeRow).length : 0)
         if (this._releaseAnim) this._releaseAnim.stop()
         this._releaseAnim = Animated.spring(this._moveAnim, {
           toValue: this._releaseVal,
@@ -179,18 +178,19 @@ class SortableFlatList extends Component {
     const nextSpacerIndex = this.getSpacerIndex(this._move, activeRow)
     if (nextSpacerIndex > -1 && nextSpacerIndex !== this._spacerIndex) {
       LayoutAnimation.easeInEaseOut()
+      this._oldSpacerIndex = this._spacerIndex;
+      this._spacerIndex = nextSpacerIndex;
       this.setState({ spacerIndex: nextSpacerIndex })
-      this._spacerIndex = nextSpacerIndex
+      
       if (nextSpacerIndex === data.length && this.props.scrollEnabled) this._flatList.scrollToEnd()
     }
 
     // Scroll if hovering in top or bottom of container and have set a scroll %
     const isLastItem = (activeRow === data.length - 1) || nextSpacerIndex === data.length
     const isFirstItem = activeRow === 0
-    if (this._measurements[activeRow]) {
-      const rowSize = this._measurements[activeRow][horizontal ? 'width' : 'height']
-      const hoverItemTopPosition = Math.max(0, this._move - (this._additionalOffset + this._containerOffset))
-      const hoverItemBottomPosition = Math.min(this._containerSize, hoverItemTopPosition + rowSize)
+
+    var active = this._getFrameMetrics(activeRow);
+    if (active) {
       const fingerPosition = Math.max(0, this._move - this._containerOffset)
       const shouldScrollUp = !isFirstItem && fingerPosition < (this._containerSize * scrollRatio)
       const shouldScrollDown = !isLastItem && fingerPosition > (this._containerSize * (1 - scrollRatio))
@@ -211,67 +211,80 @@ class SortableFlatList extends Component {
     this._flatList.scrollToOffset({ offset, animated: false })
   }
 
+  getFrameAt = (hoverPoint) => {
+    for (var key in this._frames) {
+      if (this._frames.hasOwnProperty(key)) {
+        const frame = this._frames[key];
+        if (hoverPoint > frame.offset && hoverPoint < (frame.offset + frame.length) && frame.inLayout) {
+          return frame;
+        }
+      }
+    }
+    return undefined;
+  }
+
+  getRowIndexAt = (hoverPoint) => {
+    const frame = this.getFrameAt(hoverPoint);
+    return frame ? frame.index : -1;
+  }
 
   getSpacerIndex = (move, activeRow) => {
-    const { horizontal } = this.props
-    if (activeRow === -1 || !this._measurements[activeRow]) return -1
+    const { horizontal } = this.props;
+    if (activeRow === -1){
+      return -1;
+    }
     // Find the row that contains the midpoint of the hovering item
-    const hoverItemSize = this._measurements[activeRow][horizontal ? 'width' : 'height']
+    const hoverItemSize = this.state.spacerSize;
     const hoverItemMidpoint = move - this._additionalOffset + hoverItemSize / 2
     const hoverPoint = Math.floor(hoverItemMidpoint + this._scrollOffset)
-    let spacerIndex = this._pixels[hoverPoint]
-    if (spacerIndex === undefined) {
-      // Fallback in case we can't find index in _pixels array
-      spacerIndex = this._measurements.findIndex(({ width, height, x, y }) => {
-        const itemOffset = horizontal ? x : y
-        const itemSize = horizontal ? width : height
-        return hoverPoint > itemOffset && hoverPoint < (itemOffset + itemSize)
-      })
+    const frame = this.getFrameAt(hoverPoint - this._containerOffset);
+    if (!frame) {
+      return -1;
     }
-    // Spacer index differs according to placement. See note in onPanResponderRelease
-    return spacerIndex > activeRow ? spacerIndex + 1 : spacerIndex
+    let spacerIndex = frame.index;
+    if (hoverPoint > this._containerOffset + frame.offset + Math.min(frame.length, this.state.spacerSize)) {
+      spacerIndex ++;
+    }
+    return spacerIndex;
   }
 
-  measureItem = (index) => {
-    const { activeRow } = this.state
-    const { horizontal } = this.props
-    // setTimeout required or else dimensions reported as 0
-    !!this._refs[index] && setTimeout(() => {
-      try {
-        // Using stashed ref prevents measuring an unmounted componenet, which throws an error
-        !!this._refs[index] && this._refs[index].measureInWindow(((x, y, width, height) => {
-          if ((width || height) && activeRow === -1) {
-            const ypos = y + this._scrollOffset
-            const xpos = x + this._scrollOffset
-            const pos = horizontal ? xpos : ypos
-            const size = horizontal ? width : height
-            const rowMeasurements = { y: ypos, x: xpos, width, height }
-            this._measurements[index] = rowMeasurements
-            for (let i = Math.floor(pos); i < pos + size; i++) {
-              this._pixels[i] = index
-            }
-          }
-        }))
-      } catch (e) {
-        console.log('## measure error -- index: ', index, activeRow, this._refs[index], e)
-      }
-    }, 100)
+  measureContainer = async() => {
+    const { horizontal } = this.props;
+    try{
+      return await new Promise(resolve => {
+        this._container.measure((x, y, width, height, pageX, pageY) => {
+          this._containerOffset = horizontal ? pageX : pageY;
+          this._containerSize = horizontal ? width : height;
+          resolve(true);
+        });
+      });
+    }
+    catch (ex) {
+      console.log("Cannot measure container", ex);
+      return false;
+    }
   }
 
-  move = (hoverComponent, index) => {
-    const { onMoveBegin } = this.props
+  move = async(hoverComponent, index) => {
+    const { onBeforeMove, onMoveBegin } = this.props
     if (this._releaseAnim) {
       this._releaseAnim.stop()
       this.onReleaseAnimationEnd()
       return
     }
     this._spacerIndex = index
-    this.setState({
+    if (onBeforeMove) {
+      await onBeforeMove(index);
+    }
+    await new Promise(resolve => this.setState({
       activeRow: index,
       spacerIndex: index,
+      spacerSize: this._getFrameMetrics(index).length,
       hoverComponent,
-    }, () => onMoveBegin && onMoveBegin(index)
-    )
+    }, resolve));
+    if (onMoveBegin) {
+      await onMoveBegin(index);
+    }
   }
 
   moveEnd = () => {
@@ -281,7 +294,16 @@ class SortableFlatList extends Component {
   setRef = index => (ref) => {
     if (!!ref) {
       this._refs[index] = ref
-      this.measureItem(index)
+    }
+  }
+
+  onChildLayout = (index, event) => {
+    if (index === this.state.activeRow) {
+      const { horizontal } = this.props;
+      const spacerSize = event.nativeEvent.layout[horizontal ? 'width' : 'height'];
+      if (spacerSize > 0) {
+        this.setState({spacerSize});
+      }
     }
   }
 
@@ -289,8 +311,8 @@ class SortableFlatList extends Component {
     const { renderItem, data, horizontal } = this.props
     const { activeRow, spacerIndex } = this.state
     const isSpacerRow = spacerIndex === index
-    const spacerSize = (isSpacerRow && this._measurements[activeRow]) ? this._measurements[activeRow][horizontal ? 'width' : 'height'] : 0
-    const endPadding = index === data.length - 1 && spacerIndex === data.length && this._measurements[activeRow][horizontal ? 'width' : 'height']
+    const spacerSize = isSpacerRow ? this.state.spacerSize : 0;
+    const endPadding = index === data.length - 1 && spacerIndex === data.length && this.state.spacerSize;
     return (
       <RowItem
         horizontal={horizontal}
@@ -301,6 +323,7 @@ class SortableFlatList extends Component {
         renderItem={renderItem}
         item={item}
         setRef={this.setRef}
+        onChildLayout={this.onChildLayout}
         move={this.move}
         moveEnd={this.moveEnd}
         endPadding={endPadding}
@@ -321,17 +344,6 @@ class SortableFlatList extends Component {
     )
   }
 
-  measureContainer = (callback) => {
-    if (this._container) {
-        const { horizontal } = this.props
-        this._container.measureInWindow((x, y, width, height) => {
-          this._containerOffset = horizontal ? x : y
-          this._containerSize = horizontal ? width : height
-          callback && callback();
-        })
-    }
-  }
-
   keyExtractor = (item, index) => `sortable-flatlist-item-${index}`
 
   componentDidUpdate = (prevProps, prevState) => {
@@ -344,11 +356,7 @@ class SortableFlatList extends Component {
     const { wrap } = this.props
     this._refs = []
     return (
-      <View
-        onLayout={() => {
-          this.measureContainer()
-          this._refs.forEach((ref, index) => this.measureItem(index))
-        }}
+      <View collapsable={false}
         ref={ref => (this._container = ref)}
         {...this._panResponder.panHandlers}
         style={styles.wrapper} // Setting { opacity: 1 } fixes Android measurement bug: https://github.com/facebook/react-native/issues/18034#issuecomment-368417691
@@ -360,19 +368,28 @@ class SortableFlatList extends Component {
   }
 
   renderFlatList() {
-    const { horizontal, keyExtractor, extraData } = this.props
+    const { horizontal, keyExtractor, extraData, scrollEnabled } = this.props
     const extraDataWithState = Object.assign({}, extraData, this.state);
     return (
       <FlatList
         {...this.props}
-        scrollEnabled={this.props.scrollEnabled && this.state.activeRow === -1}
-        ref={ref => (this._flatList = ref)}
+        scrollEnabled={scrollEnabled && this.state.activeRow === -1}
+        ref={ref => {
+          this._flatList = ref;
+          if (ref) {
+            this._virtList = this._flatList._listRef;
+            this._frames = this._virtList._frames;
+            this._getFrameMetrics = this._virtList._getFrameMetrics;
+          }
+        }}
         renderItem={this.renderItem}
         extraData={extraDataWithState}
         keyExtractor={keyExtractor || this.keyExtractor}
         onScroll={x => { 
-          this._scrollOffset = x.nativeEvent.contentOffset[horizontal ? 'x' : 'y']
-          this.props.onScroll && this.props.onScroll(x)
+          if (scrollEnabled) {
+            this._scrollOffset = x.nativeEvent.contentOffset[horizontal ? 'x' : 'y']
+            this.props.onScroll && this.props.onScroll(x)
+          }
         }}
         scrollEventThrottle={16}
       />
@@ -399,7 +416,7 @@ class RowItem extends PureComponent {
   }
 
   render() {
-    const { moveEnd, isActiveRow, isLastRow, horizontal, endPadding, spacerSize, renderItem, item, index, setRef } = this.props
+    const { moveEnd, isActiveRow, isLastRow, horizontal, endPadding, spacerSize, renderItem, item, index, setRef, onChildLayout } = this.props
     const component = renderItem({
       isActive: false,
       item,
@@ -409,7 +426,7 @@ class RowItem extends PureComponent {
     })
     // Rendering the final row requires padding to be applied at the bottom
     return (
-      <View ref={setRef(index)} collapsable={false} style={{ opacity: 1, flexDirection: horizontal ? 'row' : 'column' }}>
+      <View ref={setRef(index)} onLayout={e => onChildLayout(index, e)} collapsable={false} style={{ opacity: 1, flexDirection: horizontal ? 'row' : 'column' }}>
         {!!spacerSize && this.renderSpacer(spacerSize)}
         <View style={[
           horizontal ? { width: isActiveRow ? 0 : undefined } : { height: isActiveRow ? 0 : undefined },

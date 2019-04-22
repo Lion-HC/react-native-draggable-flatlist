@@ -30,14 +30,19 @@ interface DraggableFlatListProps<Item> extends VirtualizedListWithoutRenderItemP
   data: ReadonlyArray<Item> | null;
 
   /**
-   *  Function that returns updated ordering of data
+   * Function that is called before row becomes active.
    */
-  onMoveEnd?: (info: OnMoveEndInfo<Item>) => void;
+  onBeforeMove?: (index: number) => Promise<void>;
 
   /**
    * Function that is called when row becomes active.
    */
   onMoveBegin?: (index: number) => void;
+
+    /**
+   *  Function that returns updated ordering of data
+   */
+  onMoveEnd?: (info: OnMoveEndInfo<Item>) => void;
 
   /**
    * Sets where scrolling begins.
