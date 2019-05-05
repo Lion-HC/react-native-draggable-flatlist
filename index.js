@@ -301,9 +301,7 @@ class SortableFlatList extends Component {
     if (index === this.state.activeRow) {
       const { horizontal } = this.props;
       const spacerSize = event.nativeEvent.layout[horizontal ? 'width' : 'height'];
-      if (spacerSize > 0) {
-        this.setState({spacerSize});
-      }
+      this.setState({spacerSize});
     }
   }
 
@@ -318,6 +316,7 @@ class SortableFlatList extends Component {
         horizontal={horizontal}
         index={index}
         isActiveRow={activeRow === index}
+        isAfterActiveRow={index > 0 && activeRow + 1 === index}
         isLastRow={index === data.length - 1}
         spacerSize={spacerSize}
         renderItem={renderItem}
@@ -416,7 +415,7 @@ class RowItem extends PureComponent {
   }
 
   render() {
-    const { moveEnd, isActiveRow, isLastRow, horizontal, endPadding, spacerSize, renderItem, item, index, setRef, onChildLayout } = this.props
+    const { moveEnd, isActiveRow, isAfterActiveRow, isLastRow, horizontal, endPadding, spacerSize, renderItem, item, index, setRef, onChildLayout } = this.props
     const component = renderItem({
       isActive: false,
       item,
@@ -424,16 +423,30 @@ class RowItem extends PureComponent {
       move: this.move,
       moveEnd,
     })
+    const styles = StyleSheet.create({
+      wrapper: {
+        opacity: 1, 
+        flexDirection: horizontal ? 'row' : 'column', 
+        marginTop: isAfterActiveRow && !horizontal ? -1 : 0,
+        marginLeft: isAfterActiveRow && horizontal ? -1 : 0,
+      },
+      inner: {
+        opacity: isActiveRow ? 0 : 1,
+        height: isActiveRow && !horizontal ? 1 : undefined,
+        width: isActiveRow && horizontal ? 1 : undefined,
+      }
+    })
     // Rendering the final row requires padding to be applied at the bottom
     return (
-      <View ref={setRef(index)} onLayout={e => onChildLayout(index, e)} collapsable={false} style={{ opacity: 1, flexDirection: horizontal ? 'row' : 'column' }}>
+      <View ref={setRef(index)} style={styles.wrapper} collapsable={false}>
         {!!spacerSize && this.renderSpacer(spacerSize)}
-        <View style={[
-          horizontal ? { width: isActiveRow ? 0 : undefined } : { height: isActiveRow ? 0 : undefined },
-          { opacity: isActiveRow ? 0 : 1, overflow: 'hidden' }
-        ]}>
-          {component}
-        </View>
+          <View onLayout={e => {
+            if (!isActiveRow) {
+              onChildLayout(index, e);
+            }
+          }} style={styles.inner} collapsable={false}>
+            {component}
+          </View>
         {
           // Wrap endPadding spacer into View to fix Windows UIManager bug
           // If spacerSize & endPadding spacers are at the same level (have the same parent),
